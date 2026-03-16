@@ -1069,19 +1069,33 @@
     async function safeFetchJson(url, opts = {}) {
         try {
             const res = await fetch(url, opts);
-            if (!res.ok) return null;
-            const ct = res.headers.get('content-type') || '';
-            if (!ct.toLowerCase().includes('application/json')) return null;
-            return await res.json();
+            const ct  = res.headers.get('content-type') || '(none)';
+            console.log(`[shorten] status=${res.status} content-type="${ct}" url=${url.slice(0,60)}`);
+            if (!res.ok) {
+                const body = await res.text();
+                console.warn(`[shorten] non-OK body (first 200): ${body.slice(0,200)}`);
+                return null;
+            }
+            const text = await res.text();
+            console.log(`[shorten] raw body (first 200): ${text.slice(0,200)}`);
+            try {
+                return JSON.parse(text);
+            } catch(e) {
+                console.warn(`[shorten] body is not JSON:`, e.message);
+                return null;
+            }
         } catch (e) {
+            console.warn(`[shorten] fetch threw:`, e.message);
             return null;
         }
     }
 
     async function shortenUrlIfNeeded(longUrl) {
+        console.log('[shorten] calling /api/shorten with url length:', longUrl.length);
         const data = await safeFetchJson(`/api/shorten?url=${encodeURIComponent(longUrl)}`, {
-            signal: AbortSignal.timeout(6000)
+            signal: AbortSignal.timeout(8000)
         });
+        console.log('[shorten] /api/shorten response data:', JSON.stringify(data));
         if (data && data.ok && data.shortUrl) return data.shortUrl;
         console.warn('Shortening failed via /api/shorten, using long URL');
         return null;
@@ -1833,23 +1847,39 @@
             ...(task.links||[]).filter(l=>l.url).map((l,i) => `<a href="${l.url}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:8px;background:rgba(102,126,234,0.1);color:#667eea;padding:8px 14px;border-radius:8px;text-decoration:none;font-weight:600;font-size:0.9rem;border:2px solid rgba(102,126,234,0.3);">🔗 ${l.title||`קישור ${i+1}`}</a>`)
         ].filter(Boolean).join('');
 
-        // האפשרות שנבחרה (רק במשימת בחירה)
+        // האפשרות שנבחרה + הקישור שלה
         let selectedChoiceHtml = '';
         if ((task.requiresChoice || task.type === 'choice') && task.options) {
-            const chosen = (gameState.selectedChoices[taskId] || []).map(i => {
+            const chosenIndices = gameState.selectedChoices[taskId] || [];
+            const chosenItems = chosenIndices.map(i => {
                 const opt = task.options[i];
-                return typeof opt === 'string' ? opt : (opt && opt.text ? opt.text : '');
-            }).filter(Boolean);
-            if (chosen.length > 0) {
+                const text = typeof opt === 'string' ? opt : (opt && opt.text ? opt.text : '');
+                const link = typeof opt === 'string' ? '' : (opt && opt.link ? opt.link : '');
+                return { text, link };
+            }).filter(item => item.text);
+
+            if (chosenItems.length > 0) {
                 selectedChoiceHtml = `
                 <div style="background:rgba(78,205,196,0.12);border:2px solid #4ECDC4;border-radius:10px;padding:12px 16px;margin-bottom:20px;">
-                    <p style="font-size:0.8rem;font-weight:700;color:#4ECDC4;margin-bottom:6px;">🎯 הבחירה שלך:</p>
-                    ${chosen.map(c => `<p style="color:var(--text-dark);font-weight:600;margin:0;">${c}</p>`).join('')}
+                    <p style="font-size:0.8rem;font-weight:700;color:#4ECDC4;margin-bottom:8px;">🎯 הבחירה שלך:</p>
+                    ${chosenItems.map(item => `
+                        <div style="margin-bottom:${item.link ? '8px' : '4px'};">
+                            <p style="color:var(--text-dark);font-weight:600;margin:0 0 4px 0;">${item.text}</p>
+                            ${item.link ? `<a href="${item.link}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#4ECDC4,#44b8b0);color:white;padding:8px 14px;border-radius:8px;text-decoration:none;font-weight:600;font-size:0.9rem;box-shadow:0 2px 8px rgba(78,205,196,0.3);">🔗 פתח קישור לאפשרות זו ↗</a>` : ''}
+                        </div>`).join('')}
                 </div>`;
             }
         }
 
+        // כפתור חזרה לבחירה (רק כשהגיעו מ-completeChoiceTask)
+        const backToChoiceBtn = completeOnSave ? `
+        <button class="btn btn-outline" onclick="closeAnswerEditor(); setTimeout(() => openTask(tasks.find(t => t.id === ${taskId})), 50);"
+            style="margin-bottom:16px;width:100%;border-color:#4ECDC4;color:#4ECDC4;">
+            ← חזרה לבחירה
+        </button>` : '';
+
         const html = `
+        ${backToChoiceBtn}
         <h2 style="color:var(--board-primary);margin-bottom:10px;">✍️ כתיבת תשובה דיגיטלית</h2>
         <h3 style="color:var(--text-dark);margin-bottom:15px;">${task.title}</h3>
         <div style="background:#f5f7fa;padding:15px;border-radius:10px;margin-bottom:${linksHtml ? '12px' : '20px'};border-right:4px solid var(--board-primary);">
